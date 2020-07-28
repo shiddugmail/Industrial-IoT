@@ -23,6 +23,32 @@ namespace Microsoft.Azure.IIoT.OpcUa.Publisher.Clients {
     public sealed class PublisherJobService : IPublishServices<string> {
 
         /// <summary>
+        /// Read default batch trigger interval from environment.
+        /// </summary>
+        internal Lazy<TimeSpan> DefaultBatchTriggerInterval => new Lazy<TimeSpan>(() => {
+            var env = Environment.GetEnvironmentVariable("PCS_DEFAULT_PUBLISH_JOB_BATCH_INTERVAL");
+            if (!string.IsNullOrEmpty(env)) {
+                if (int.TryParse(env, out var milliseconds) &&
+                    milliseconds >= 100 && milliseconds <= 3600000) {
+                    return TimeSpan.FromMilliseconds(milliseconds);
+                }
+            }
+            return TimeSpan.FromMilliseconds(500); // default
+        });
+
+        /// <summary>
+        /// Read default batch trigger size from environment.
+        /// </summary>
+        internal Lazy<int> DefaultBatchSize => new Lazy<int>(() => {
+            var env = Environment.GetEnvironmentVariable("PCS_DEFAULT_PUBLISH_JOB_BATCH_SIZE");
+            if (!string.IsNullOrEmpty(env) && int.TryParse(env, out var size) &&
+                size > 1 && size <= 1000) {
+                return size;
+            }
+            return 50; // default
+        });
+
+        /// <summary>
         /// Create client
         /// </summary>
         /// <param name="endpoints"></param>
@@ -253,8 +279,8 @@ namespace Microsoft.Azure.IIoT.OpcUa.Publisher.Clients {
                     },
                 },
                 Engine = new EngineConfigurationModel() {
-                    BatchSize = 50,
-                    BatchTriggerInterval = TimeSpan.FromSeconds(10),
+                    BatchSize = DefaultBatchSize.Value,
+                    BatchTriggerInterval = DefaultBatchTriggerInterval.Value,
                     DiagnosticsInterval = TimeSpan.FromSeconds(60),
                     MaxMessageSize = 0
                 },
@@ -348,7 +374,6 @@ namespace Microsoft.Azure.IIoT.OpcUa.Publisher.Clients {
                 };
                 variables = dataSetWriter.DataSet.DataSetSource.PublishedVariables.PublishedData;
                 publishJob.WriterGroup.DataSetWriters.Add(dataSetWriter);
-
             }
 
             // Add to published variable list items
