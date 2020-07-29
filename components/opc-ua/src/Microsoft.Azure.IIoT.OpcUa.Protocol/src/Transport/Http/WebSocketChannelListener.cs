@@ -109,6 +109,11 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Transport {
         }
 
         /// <inheritdoc/>
+        public bool TransferListenerChannel(uint channelId, string serverUri, Uri endpointUrl) {
+            throw new NotImplementedException();
+        }
+
+        /// <inheritdoc/>
         public void OnAccept(HttpContext context, WebSocket webSocket) {
             SecureChannel channel = null;
             // check if the accept socket has been created.
@@ -148,7 +153,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Transport {
         /// <param name="channel"></param>
         /// <param name="requestId"></param>
         /// <param name="request"></param>
-        private void OnRequestReceived(TcpServerChannel channel,
+        private void OnRequestReceived(TcpListenerChannel channel,
             uint requestId, IServiceRequest request) {
             try {
                 var result = _controller.Callback.BeginProcessRequest(

@@ -77,7 +77,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Transport {
 
         /// <inheritdoc/>
         public Task<bool> BeginConnect(Uri endpointUrl,
-            EventHandler<IMessageSocketAsyncEventArgs> callback, object state) {
+            EventHandler<IMessageSocketAsyncEventArgs> callback, object state, CancellationToken ct) {
             throw new NotSupportedException("Only server accepted sockets are supported");
         }
 

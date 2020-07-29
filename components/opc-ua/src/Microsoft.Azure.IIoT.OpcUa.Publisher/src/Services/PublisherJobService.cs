@@ -288,6 +288,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Publisher.Clients {
             };
         }
 
+
         /// <summary>
         /// Add or update item in job
         /// </summary>

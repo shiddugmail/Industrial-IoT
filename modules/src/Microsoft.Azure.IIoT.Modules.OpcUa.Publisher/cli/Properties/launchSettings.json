@@ -1,7 +1,8 @@
 {
   "profiles": {
     "Microsoft.Azure.IIoT.Modules.OpcUa.Publisher.Cli": {
-      "commandName": "Project"
+      "commandName": "Project",
+      "commandLineArgs": "--pf=d:\\git\\published_nodes.json --fd=false --fm=false --bs=100 --di=20 --to --aa --BatchTriggerInterval=00:00:00.500 --mm=Samples --me=Json"
     }
   }
 }

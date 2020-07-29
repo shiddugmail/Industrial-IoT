@@ -39,27 +39,12 @@
       <Visitor>False</Visitor>
     </Antlr4>
   </ItemGroup>
-  <Choose>
-    <When Condition="'$(Configuration)'=='Release'">
-      <ItemGroup>
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Core" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Configuration" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Server" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Client" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Client.ComplexTypes" Version="1.4.360.41" />
-      </ItemGroup>
-    </When>
-    <Otherwise>
-      <ItemGroup>
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Core.Debug" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Configuration.Debug" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Server.Debug" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Client.Debug" Version="1.4.360.41" />
-        <PackageReference Include="Microsoft.Azure.IIoT.Opc.Ua.Client.ComplexTypes.Debug" Version="1.4.360.41" />
-      </ItemGroup>
-    </Otherwise>
-  </Choose>
   <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\..\Industrial-IoT-OpcUa-Internal\Libraries\Opc.Ua.Client.ComplexTypes\Microsoft.Azure.IIoT.Opc.Ua.Client.ComplexTypes.csproj" />
+    <ProjectReference Include="..\..\..\..\..\..\Industrial-IoT-OpcUa-Internal\Libraries\Opc.Ua.Client\Microsoft.Azure.IIoT.Opc.Ua.Client.csproj" />
+    <ProjectReference Include="..\..\..\..\..\..\Industrial-IoT-OpcUa-Internal\Libraries\Opc.Ua.Configuration\Microsoft.Azure.IIoT.Opc.Ua.Configuration.csproj" />
+    <ProjectReference Include="..\..\..\..\..\..\Industrial-IoT-OpcUa-Internal\Libraries\Opc.Ua.Server\Microsoft.Azure.IIoT.Opc.Ua.Server.csproj" />
+    <ProjectReference Include="..\..\..\..\..\..\Industrial-IoT-OpcUa-Internal\Stack\Opc.Ua.Core\Microsoft.Azure.IIoT.Opc.Ua.Core.csproj" />
     <ProjectReference Include="..\..\..\..\..\common\src\Microsoft.Azure.IIoT.Serializers.NewtonSoft\src\Microsoft.Azure.IIoT.Serializers.NewtonSoft.csproj" />
   </ItemGroup>
   <ItemGroup>
