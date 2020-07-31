@@ -269,27 +269,13 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
                         SequenceNumber = sequenceNumber,
                         ApplicationUri = notification.ApplicationUri,
                         EndpointUrl = notification.EndpointUrl,
-                        TimeStamp = notification.Timestamp,
                         PublisherId = _outer._publisherId,
                         Writer = _dataSetWriter,
                         WriterGroup = _outer._writerGroup
                     };
-                    lock (_lock) {
-                        if (_outer.DataChangesCount >= kNumberOfInvokedMessagesResetThreshold ||
-                            _outer.ValueChangesCount >= kNumberOfInvokedMessagesResetThreshold) {
-                            // reset both
-                            _outer._logger.Debug("Notifications counter has been reset to prevent overflow. " +
-                                "So far, {DataChangesCount} data changes and {ValueChangesCount}" +
-                                " value changes were invoked by message source.",
-                                _outer.DataChangesCount, _outer.ValueChangesCount);
-                            Interlocked.Exchange(ref _outer._dataChangesCount, 0);
-                            Interlocked.Exchange(ref _outer._valueChangesCount, 0);
-                        }
-
-                        Interlocked.Add(ref _outer._valueChangesCount, notification.Notifications.Count);
-                        Interlocked.Increment(ref _outer._dataChangesCount);
-                        _outer.OnMessage?.Invoke(sender, message);
-                    }
+                    _outer.OnMessage?.Invoke(sender, message);
+                    Interlocked.Add(ref _outer._valueChangesCount, notification.Notifications.Count);
+                    Interlocked.Increment(ref _outer._dataChangesCount);
                 }
                 catch (Exception ex) {
                     _outer._logger.Debug(ex, "Failed to produce message");

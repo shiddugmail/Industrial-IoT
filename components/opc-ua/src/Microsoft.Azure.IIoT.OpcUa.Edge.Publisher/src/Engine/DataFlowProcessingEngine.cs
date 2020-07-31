@@ -5,6 +5,7 @@
 
 namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
     using Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Models;
+    using Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils;
     using Microsoft.Azure.IIoT.OpcUa.Publisher;
     using Microsoft.Azure.IIoT.Agent.Framework;
     using Microsoft.Azure.IIoT.Agent.Framework.Models;
@@ -16,15 +17,14 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
-    using System.Threading.Tasks.Dataflow;
     using System.Text;
     using System.Collections.Generic;
     using System.Diagnostics;
-    using Prometheus;
-    using System.Security.Cryptography.X509Certificates;
     using System.Reactive.Linq;
+    using Prometheus;
+    using System.Collections.Concurrent;
     using System.Reactive.Concurrency;
-    using System.Security.Cryptography;
+    using System.Threading.Tasks.Dataflow;
 
     /// <summary>
     /// Dataflow engine
@@ -84,51 +84,71 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
             if (_messageEncoder == null) {
                 throw new NotInitializedException();
             }
-            try {
-                if (IsRunning) {
-                    return;
-                }
+            if (IsRunning) {
+                return;
+            }
 
+            var observable = new ObservableWithBackpressure<DataSetMessageModel>(_logger);
+            void _messageTrigger_OnMessage(object sender, DataSetMessageModel e) => observable.OnNext(e);
+            try {
                 if (_diagnosticInterval > TimeSpan.Zero) {
                     _diagnosticStart = DateTime.UtcNow;
                     _diagnosticsOutputTimer.Change(_diagnosticInterval, _diagnosticInterval);
                 }
 
-                IsRunning = true;
-                using (var subscription = Observable
-                    .FromEventPattern<DataSetMessageModel>(
-                        e => _messageTrigger.OnMessage += e,
-                        e => _messageTrigger.OnMessage -= e)
-                    .Synchronize()
-                    .Select(e => e.EventArgs)
-                    .Buffer(_batchTriggerInterval, _dataSetMessageBufferSize)
-                    .Select(input => {
-                        // Encode
-                        IEnumerable<NetworkMessageModel> result;
-                        try {
-                            if (_dataSetMessageBufferSize == 1) {
-                                result = _messageEncoder.Encode(input, _maxEncodedMessageSize);
-                            }
-                            else {
-                                result = _messageEncoder.EncodeBatch(input, _maxEncodedMessageSize);
-                            }
-                        }
-                        catch (Exception e) {
-                            _logger.Error(e, "Encoding failure");
-                            result = Enumerable.Empty<NetworkMessageModel>();
-                        }
-                        return result;
-                    })
-                    .Do(input => Interlocked.Add(ref _messageSending, input.Count()))
-                    .Select(input => Observable.FromAsync(ct => _messageSink.SendAsync(input), Scheduler.Immediate))
-                    .Merge(1) // single concurrency sending to keep order
-                    .Subscribe()) {
-                    //.Subscribe(input => _messageSink.SendAsync(input).Wait())) {
+                var _sendQueue = new BlockingCollection<IList<NetworkMessageModel>>();
+                async Task SendAllAsync(CancellationToken ct) {
+                    while (!ct.IsCancellationRequested) {
+                        var sw = Stopwatch.StartNew();
+                        var messages = _sendQueue.Take(ct);
+                        _logger.Debug("Waited {elapsed}", sw.Elapsed);
+                        sw.Restart();
+                        await _messageSink.SendAsync(messages);
+                        _logger.Debug("Sending took {elapsed}", sw.Elapsed);
+                        sw.Restart();
+                        observable.DrainOne();
+                        _logger.Verbose("Drain took {elapsed}", sw.Elapsed);
+                    }
+                }
 
-                    await _messageTrigger.RunAsync(cancellationToken).ConfigureAwait(false);
+                // Encoder
+                var encoder = new TransformBlock<IList<DataSetMessageModel>, IList<NetworkMessageModel>>(
+                    Encode,
+                    new ExecutionDataflowBlockOptions {
+                        BoundedCapacity = 5,
+                        EnsureOrdered = true,
+                        MaxDegreeOfParallelism = DataflowBlockOptions.Unbounded,
+                        CancellationToken = cancellationToken
+                    });
+
+                // produce
+                _messageTrigger.OnMessage += _messageTrigger_OnMessage;
+                var producer = _messageTrigger.RunAsync(cancellationToken).ConfigureAwait(false);
+                var consumer = Task.Factory.StartNew(() => SendAllAsync(cancellationToken),
+                    TaskCreationOptions.LongRunning).Unwrap();
+                IsRunning = true;
+                try {
+                    // Buffer and encode
+                    observable
+                        .Buffer(_batchTriggerInterval, _dataSetMessageBufferSize)
+                        .Subscribe(encoder.AsObserver(), cancellationToken);
+                    await encoder.AsObservable()
+                        .ForEachAsync(input => {
+                            Interlocked.Add(ref _messageSending, input.Count);
+                            _sendQueue.Add(input.ToList());
+                            observable.FillOne();
+                        }, cancellationToken);
+                }
+                catch (Exception ex) {
+                    _logger.Error(ex, "Failed processing");
+                }
+                finally {
+                    await producer; // Complete
+                    await consumer;
                 }
             }
             finally {
+                _messageTrigger.OnMessage -= _messageTrigger_OnMessage;
                 IsRunning = false;
                 _diagnosticsOutputTimer.Change(Timeout.Infinite, Timeout.Infinite);
             }
@@ -137,6 +157,27 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
         /// <inheritdoc/>
         public Task SwitchProcessMode(ProcessMode processMode, DateTime? timestamp) {
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Encode
+        /// </summary>
+        /// <param name="input"></param>
+        /// <returns></returns>
+        private IList<NetworkMessageModel> Encode(IList<DataSetMessageModel> input) {
+            // Encode
+            try {
+                if (_dataSetMessageBufferSize == 1) {
+                    return _messageEncoder.Encode(input, _maxEncodedMessageSize);
+                }
+                else {
+                    return _messageEncoder.EncodeBatch(input, _maxEncodedMessageSize);
+                }
+            }
+            catch (Exception e) {
+                _logger.Error(e, "Encoding failure");
+                return Enumerable.Empty<NetworkMessageModel>().ToList();
+            }
         }
 
         /// <summary>
@@ -155,10 +196,6 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
             var estimatedMsgChunksPerDay = Math.Ceiling(chunkSizeAverage) * sentMessagesPerSec * 60 * 60 * 24;
             var deviceId = _identity.DeviceId ?? "";
             var moduleId = _identity.ModuleId ?? "";
-
-            ThreadPool.GetAvailableThreads(out var curWorkerThreads, out var curIoThreads);
-            ThreadPool.GetMinThreads(out var minWorkerThreads, out var minIoThreads);
-            ThreadPool.GetMaxThreads(out var maxWorkerThreads, out var maxIoThreads);
 
             var diagInfo = new StringBuilder();
             diagInfo.AppendLine("\n  DIAGNOSTICS INFORMATION for          : {host} ({deviceId}; {moduleId})");
@@ -185,9 +222,6 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
             diagInfo.AppendLine("  # IoT message send failure count     : {messageSinkSentFailures,14:n0}");
             diagInfo.AppendLine("  # Memory (Workingset / Private)      : {workingSet,14:0} | {privateMemory} kb");
             diagInfo.AppendLine("  # Handle count                       : {handleCount,14:0}");
-            diagInfo.AppendLine("  # Threadpool Work Items / completed  : {pendingWorkItems,14:0} | {completedWorkItems} {threadCount}");
-            diagInfo.AppendLine("  # Threadpool Worker Threads          : {curWorkerThreads,14:0} (min: {minWorkerThreads} / max:{maxWorkerThrads})");
-            diagInfo.AppendLine("  # Threadpool IO Threads              : {curIoThreads,14:0} (min: {minIoThreads} / max:{maxIoThreads})");
 
             _logger.Information(diagInfo.ToString(),
                 Name, deviceId, moduleId,
@@ -207,10 +241,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
                 _messageSink.SentMessagesCount, sentMessagesPerSecFormatted,
                 _messageSink.SendErrorCount,
                 Process.GetCurrentProcess().WorkingSet64 / 1024, Process.GetCurrentProcess().PrivateMemorySize64 / 1024,
-                Process.GetCurrentProcess().HandleCount,
-                ThreadPool.PendingWorkItemCount, ThreadPool.CompletedWorkItemCount, ThreadPool.ThreadCount,
-                curWorkerThreads, minWorkerThreads, maxWorkerThreads,
-                curIoThreads, minIoThreads, maxIoThreads);
+                Process.GetCurrentProcess().HandleCount);
 
             kDataChangesCount.WithLabels(deviceId, moduleId, Name)
                 .Set(_messageTrigger.DataChangesCount);
@@ -270,4 +301,5 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
             "iiot_edge_publisher_processed_messages",
             "publisher engine processed iot messages count", kGaugeConfig);
     }
+
 }

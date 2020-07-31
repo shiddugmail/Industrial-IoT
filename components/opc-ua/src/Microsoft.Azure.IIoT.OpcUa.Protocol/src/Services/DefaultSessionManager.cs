@@ -554,7 +554,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Services {
 
                 // Validate thumbprint
                 if (e.Certificate.RawData != null && !string.IsNullOrWhiteSpace(e.Certificate.Thumbprint)) {
-                    
+
                     if (_sessions.Keys.Any(id => id?.Connection?.Endpoint?.Certificate != null &&
                         e.Certificate.Thumbprint == id.Connection.Endpoint.Certificate)) {
                         e.Accept = true;
@@ -668,28 +668,10 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Services {
         /// <param name="session"></param>
         /// <param name="e"></param>
         private void Session_Notification(Session session, NotificationEventArgs e) {
-
-            try {
-                _logger.Debug("Notification for session '{id}', subscription '{displayName}' - sequence# {sequence}-{publishTime}",
-                    session?.Handle is SessionWrapper wrapper ? wrapper?.Id : session?.SessionName,
-                    e.Subscription?.DisplayName, e?.NotificationMessage?.SequenceNumber,
-                    e.NotificationMessage?.PublishTime);
-                if (e.NotificationMessage.IsEmpty || e.NotificationMessage.NotificationData.Count() == 0) {
-                    var keepAlive = new DataChangeNotification() {
-                        MonitoredItems = new MonitoredItemNotificationCollection() {
-                        new MonitoredItemNotification() {
-                            ClientHandle = 0,
-                            Value = null,
-                            Message = e.NotificationMessage
-                        }
-                    }
-                    };
-                    e.Subscription.FastDataChangeCallback.Invoke(e.Subscription, keepAlive, e.StringTable);
-                }
-            }
-            catch (Exception ex) {
-                _logger.Error(ex, "Failed to process notifications for session '{name}'", session.SessionName);
-            }
+            _logger.Debug("Notification for session '{id}', subscription '{displayName}' - sequence# {sequence}-{publishTime}",
+                session?.Handle is SessionWrapper wrapper ? wrapper?.Id : session?.SessionName,
+                e.Subscription?.DisplayName, e?.NotificationMessage?.SequenceNumber,
+                e.NotificationMessage?.PublishTime);
         }
 
         /// <summary>

@@ -579,6 +579,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Services {
                         PublishingEnabled = activate, // false on initialization
                         KeepAliveCount = revisedKeepAliveCount,
                         FastDataChangeCallback = OnSubscriptionDataChanged,
+                        DisableMonitoredItemCache = true,
                         PublishingInterval = (int)_subscription.Configuration.PublishingInterval
                             .GetValueOrDefault(TimeSpan.FromSeconds(1)).TotalMilliseconds,
                         MaxNotificationsPerPublish = _subscription.Configuration.MaxNotificationsPerPublish
@@ -692,80 +693,72 @@ namespace Microsoft.Azure.IIoT.OpcUa.Protocol.Services {
                         return;
                     }
 
-                    // check if notification is a keep alive
-                    var isKeepAlive = notification?.MonitoredItems?.Count == 1 &&
-                                      notification?.MonitoredItems?.First().ClientHandle == 0 &&
-                                      notification?.MonitoredItems?.First().Message?.NotificationData?.Count == 0;
-                    var sequenceNumber = notification?.MonitoredItems?.First().Message?.SequenceNumber;
-                    var publishTime = (notification?.MonitoredItems?.First().Message?.PublishTime).
-                        GetValueOrDefault(DateTime.UtcNow);
-
-                    _logger.Debug("DataChange for subscription: {Subscription}, sequence#: " +
-                        "{Sequence} isKeepAlive: {KeepAlive}, publishTime: {PublishTime}",
-                        subscription.DisplayName, sequenceNumber, isKeepAlive, publishTime);
-
                     var message = new SubscriptionNotificationModel {
                         ServiceMessageContext = subscription?.Session?.MessageContext,
                         ApplicationUri = subscription?.Session?.Endpoint?.Server?.ApplicationUri,
                         EndpointUrl = subscription?.Session?.Endpoint?.EndpointUrl,
                         SubscriptionId = Id,
-                        Timestamp = publishTime,
-                        Notifications = notification.ToMonitoredItemNotifications(
-                                subscription?.MonitoredItems)?.ToList()
+                        Notifications = notification.ToMonitoredItemNotifications(subscription?.MonitoredItems)?.ToList()
                     };
-                    // add the heartbeat for monitored items that did not receive a datachange notification
-                    // Try access lock if we cannot continue...
-                    List<MonitoredItemWrapper> currentlyMonitored = null;
-                    if (_lock?.Wait(0) ?? true) {
-                        try {
-                            currentlyMonitored = _currentlyMonitored;
-                        }
-                        finally {
-                            _lock?.Release();
-                        }
-                    }
 
-                    if (currentlyMonitored != null) {
-                        // add the heartbeat for monitored items that did not receive a
-                        // a datachange notification
-                        foreach (var item in currentlyMonitored) {
-                            if (!notification.MonitoredItems.
-                                Exists(m => m.ClientHandle == item.Item.ClientHandle)) {
-                                if (item.ValidateHeartbeat(publishTime)) {
-                                    var defaultNotification =
-                                        new MonitoredItemNotificationModel {
-                                            Id = item.Item.DisplayName,
-                                            DisplayName = item.Item.DisplayName,
-                                            NodeId = item.Item.StartNodeId,
-                                            AttributeId = item.Item.AttributeId,
-                                            ClientHandle = item.Item.ClientHandle,
-                                            Value = new DataValue(Variant.Null,
-                                                item.Item?.Status?.Error?.StatusCode ??
-                                                StatusCodes.BadMonitoredItemIdInvalid),
-                                            Overflow = false,
-                                            NotificationData = null,
-                                            StringTable = null,
-                                            DiagnosticInfo = null,
-                                        };
+                    // TODO: Thread out heartbeat generation...
 
-                                    var heartbeatValue = item.Item?.LastValue.
-                                        ToMonitoredItemNotification(item.Item, () => defaultNotification);
-                                    if (heartbeatValue != null) {
-                                        heartbeatValue.SequenceNumber = sequenceNumber;
-                                        heartbeatValue.IsHeartbeat = true;
-                                        heartbeatValue.PublishTime = publishTime;
-                                        if (message.Notifications == null) {
-                                            message.Notifications =
-                                                new List<MonitoredItemNotificationModel>();
-                                        }
-                                        message.Notifications.Add(heartbeatValue);
-                                    }
-                                    continue;
-                                }
-                            }
-                            item.ValidateHeartbeat(publishTime);
-                        }
-                    }
+                  // // add the heartbeat for monitored items that did not receive a datachange notification
+                  // // Try access lock if we cannot continue...
+                  // List<MonitoredItemWrapper> currentlyMonitored = null;
+                  // if (_lock?.Wait(0) ?? true) {
+                  //     try {
+                  //         currentlyMonitored = _currentlyMonitored;
+                  //     }
+                  //     finally {
+                  //         _lock?.Release();
+                  //     }
+                  // }
+                  //
+                   // if (currentlyMonitored != null) {
+                   //     // add the heartbeat for monitored items that did not receive a
+                   //     // a datachange notification
+                   //     foreach (var item in currentlyMonitored) {
+                   //      //   var sequenceNumber = notification?.MonitoredItems?.First().Message?.SequenceNumber;
+                   //         var publishTime = (notification?.MonitoredItems?.First().Message?.PublishTime).
+                   //             GetValueOrDefault(DateTime.UtcNow);
+                   //
+                   //         var monitoredItem = notification.MonitoredItems.FirstOrDefault(m => m.ClientHandle == item.Item.ClientHandle);
+                   //         if (monitoredItem != null) {
+                   //             if (item.ValidateHeartbeat(publishTime)) {
+                   //                 var defaultNotification =
+                   //                     new MonitoredItemNotificationModel {
+                   //                         Id = item.Item.DisplayName,
+                   //                         DisplayName = item.Item.DisplayName,
+                   //                         NodeId = item.Item.StartNodeId,
+                   //                         AttributeId = item.Item.AttributeId,
+                   //                         ClientHandle = item.Item.ClientHandle,
+                   //                         Value = new DataValue(Variant.Null,
+                   //                             item.Item?.Status?.Error?.StatusCode ??
+                   //                             StatusCodes.BadMonitoredItemIdInvalid),
+                   //                         Overflow = false,
+                   //                         NotificationData = null,
+                   //                         StringTable = null,
+                   //                         DiagnosticInfo = null,
+                   //                     };
+                   //
+                   //                 var heartbeatValue = item.Item?.LastValue.
+                   //                     ToMonitoredItemNotification(item.Item, () => defaultNotification);
+                   //                 if (heartbeatValue != null) {
+                   //                     heartbeatValue.IsHeartbeat = true;
+                   //                     heartbeatValue.PublishTime = publishTime;
+                   //                     if (message.Notifications == null) {
+                   //                         message.Notifications =
+                   //                             new List<MonitoredItemNotificationModel>();
+                   //                     }
+                   //                     message.Notifications.Add(heartbeatValue);
+                   //                 }
+                   //                 continue;
+                   //             }
+                   //         }
+                   //         item.ValidateHeartbeat(publishTime);
+                   //     }
+                   // }
 
                     if (message.Notifications?.Any() == true) {
                         OnSubscriptionChange?.Invoke(this, message);

@@ -43,8 +43,8 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher {
         /// <param name="message"></param>
         /// <param name="maxMessageSize"></param>
         /// <returns></returns>
-        IEnumerable<NetworkMessageModel> Encode(
-            IEnumerable<DataSetMessageModel> message, int maxMessageSize);
+        IList<NetworkMessageModel> Encode(
+            IList<DataSetMessageModel> message, int maxMessageSize);
 
         /// <summary>
         /// Encodes the list of messages into batched NetworkMessageModel list
@@ -52,7 +52,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher {
         /// <param name="messages"></param>
         /// <param name="maxMessageSize"></param>
         /// <returns></returns>
-        IEnumerable<NetworkMessageModel> EncodeBatch
-            (IEnumerable<DataSetMessageModel> messages, int maxMessageSize);
+        IList<NetworkMessageModel> EncodeBatch(
+            IList<DataSetMessageModel> messages, int maxMessageSize);
     }
 }

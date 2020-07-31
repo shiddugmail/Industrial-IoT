@@ -1,7 +1,8 @@
 {
-    "profiles": {
-        "Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli": {
-            "commandName": "Project"
-        }
+  "profiles": {
+    "Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli": {
+        "commandName": "Project",
+        "commandLineArgs": "-s Raw"
     }
+  }
 }

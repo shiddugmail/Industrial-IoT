@@ -43,19 +43,19 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
         public double AvgMessageSize { get; private set; }
 
         /// <inheritdoc/>
-        public IEnumerable<NetworkMessageModel> Encode(
-            IEnumerable<DataSetMessageModel> messages, int maxMessageSize) {
+        public IList<NetworkMessageModel> Encode(
+            IList<DataSetMessageModel> messages, int maxMessageSize) {
             var resultJson = EncodeAsJson(messages, maxMessageSize);
             var resultUadp = EncodeAsUadp(messages, maxMessageSize);
-            return resultJson.Concat(resultUadp);
+            return resultJson.Concat(resultUadp).ToList();
         }
 
         /// <inheritdoc/>
-        public IEnumerable<NetworkMessageModel> EncodeBatch(
-            IEnumerable<DataSetMessageModel> messages, int maxMessageSize) {
+        public IList<NetworkMessageModel> EncodeBatch(
+            IList<DataSetMessageModel> messages, int maxMessageSize) {
             var resultJson = EncodeBatchAsJson(messages, maxMessageSize);
             var resultUadp = EncodeBatchAsUadp(messages, maxMessageSize);
-            return resultJson.Concat(resultUadp);
+            return resultJson.Concat(resultUadp).ToList();
         }
 
         /// <summary>

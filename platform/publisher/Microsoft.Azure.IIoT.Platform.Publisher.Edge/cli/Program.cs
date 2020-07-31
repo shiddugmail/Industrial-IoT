@@ -12,6 +12,8 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
     using Microsoft.Azure.IIoT.OpcUa.Publisher.Models;
     using Microsoft.Azure.IIoT.Diagnostics;
     using Microsoft.Azure.IIoT.Module;
+    using Microsoft.Azure.Devices.Client;
+    using Microsoft.Azure.Devices.Client.Transport.Mqtt;
     using Opc.Ua;
     using Serilog;
     using Serilog.Events;
@@ -21,24 +23,38 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
+    using System.Security.Cryptography.X509Certificates;
+    using System.Net.Security;
+    using Microsoft.Azure.EventHubs;
+    using Microsoft.Azure.IIoT.Utils;
+    using uPLibrary.Networking.M2Mqtt;
+    using uPLibrary.Networking.M2Mqtt.Messages;
 
     /// <summary>
     /// Publisher module host process
     /// </summary>
     public class Program {
 
+        public enum Target {
+            None,
+            Sdk,
+            Raw,
+            EventHub
+        }
+
         /// <summary>
         /// Entry point
         /// </summary>
         public static void Main(string[] args) {
-
+            var target = Target.None;
             var inputRate = 100000000; // x values total per second
             var notifications = 1000000; // over x messages
-            var outputRate = -1; // x network messages per second (-1 == max)
+            var outputRate = 0; // x network messages per second (-1 == max)
             var mode = MessagingMode.Samples;
             var encoding = MessageEncoding.Json;
             var batchInterval = TimeSpan.FromMilliseconds(500);
             var batchSize = 50;
+            var connectionString = string.Empty;
 
             Console.WriteLine("Publisher test command line interface.");
             try {
@@ -102,6 +118,19 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
                                 }
                             }
                             break;
+                        case "-s":
+                        case "--send":
+                            i++;
+                            if (i < args.Length) {
+                                if (!Enum.TryParse(args[i], out target)) {
+                                    i--;
+                                }
+                            }
+                            if (target != Target.None) {
+                                Console.WriteLine("Enter connection string:");
+                                connectionString = Console.ReadLine();
+                            }
+                            break;
                         default:
                             throw new ArgumentException($"Unknown argument {args[i]}.");
                     }
@@ -127,6 +156,8 @@ Options:
      -e      Encoding (Json/Uadp)
     --mode
      -m      Messaging mode (PubSub/Samples)
+    --connection-string
+     -c      Device Connection string
 
     --help
      -?
@@ -143,7 +174,7 @@ Options:
             };
             try {
                 RunBenchmarkAsync(inputRate, notifications, batchSize, batchInterval,
-                    mode, encoding, outputRate, logger).Wait();
+                    mode, encoding, outputRate, logger, connectionString, target).Wait();
             }
             catch (Exception e) {
                 logger.Error(e, "Exception");
@@ -155,8 +186,9 @@ Options:
         /// </summary>
         /// <returns></returns>
         private static async Task RunBenchmarkAsync(int rate, int notifications, int batch, TimeSpan interval,
-            MessagingMode mode, MessageEncoding encoding, int delay, ILogger logger) {
-            using (var io = new Mock(rate, notifications, batch, interval, mode, encoding, delay, logger))
+            MessagingMode mode, MessageEncoding encoding, int delay, ILogger logger, string connectionString, Target target) {
+            using (var io = new Mock(rate, notifications, batch, interval, mode, encoding, delay, logger,
+                connectionString, target))
             using (var process = new DataFlowProcessingEngine(io, CreateEncoder(mode, encoding),
                 io, io, logger, io)) {
                 await process.RunAsync(Agent.Framework.Models.ProcessMode.Active, CancellationToken.None);
@@ -190,6 +222,8 @@ Options:
             public int? MaxMessageSize { get; }
             public TimeSpan? DiagnosticsInterval { get; }
 
+            private readonly DeviceClient _iotHubClient;
+
             public long SendErrorCount { get; }
             public long SentMessagesCount => _sentMessagesCount;
             public string DeviceId { get; } = "Device";
@@ -198,7 +232,8 @@ Options:
             public string Gateway { get; } = "Gateway";
 
             public Mock(int inputRate, int notifications, int batchSize, TimeSpan interval,
-                MessagingMode mode, MessageEncoding encoding, int outputRate, ILogger logger) {
+                MessagingMode mode, MessageEncoding encoding, int outputRate, ILogger logger,
+                string connectionString, Target target) {
                 _inputRate = inputRate < 1 ? int.MaxValue : inputRate;
                 _notifications = notifications == 0 || notifications > _inputRate ? 1 : notifications;
                 _batchSize = batchSize;
@@ -208,6 +243,32 @@ Options:
                 _outputRate = outputRate;
                 _logger = logger;
                 DiagnosticsInterval = TimeSpan.FromSeconds(10);
+
+                if (!string.IsNullOrEmpty(connectionString)) {
+                    if (target == Target.EventHub) {
+                        var cs = new EventHubsConnectionStringBuilder(connectionString) {
+
+                        }.ToString();
+                        _ehClient = EventHubClient.CreateFromConnectionString(cs);
+                    }
+                    else if (target == Target.Raw) {
+                        _rawClient = new RawMqttClient(connectionString);
+                    }
+                    else if (target == Target.Sdk) {
+                        _iotHubClient = DeviceClient.CreateFromConnectionString(connectionString, new ITransportSettings[] {
+                            new MqttTransportSettings(Devices.Client.TransportType.Mqtt_Tcp_Only) {
+                               PublishToServerQoS = DotNetty.Codecs.Mqtt.Packets.QualityOfService.AtMostOnce,
+                                RemoteCertificateValidationCallback = ValidateCertificate,
+                                CertificateRevocationCheck = false
+                            }
+
+                      //  new AmqpTransportSettings(Devices.Client.TransportType.Amqp_Tcp_Only) {
+                      //      RemoteCertificateValidationCallback = ValidateCertificate,
+                      //      CertificateRevocationCheck = false
+                      //  }
+                    });
+                    }
+                }
             }
 
             public event EventHandler<DataSetMessageModel> OnMessage;
@@ -318,10 +379,10 @@ Options:
                             Interlocked.Add(ref _valueChangesCount, values);
                             OnMessage?.Invoke(this, message);
                         }
-                        var elapsed = sw.ElapsedMilliseconds;
-                        if (elapsed < 1000) {
-                            Thread.Sleep(1000 - (int)elapsed);
-                        }
+                      //  var elapsed = sw.ElapsedMilliseconds;
+                      //  if (elapsed < 1000) {
+                      //      Thread.Sleep(1000 - (int)elapsed);
+                      //  }
                     }
                     _logger.Information("Ending producer");
                     tcs.SetResult(true);
@@ -334,14 +395,37 @@ Options:
                 var numberOfMessages = 0;
                 foreach (var message in messages) {
                     numberOfMessages++;
-                    // await File.WriteAllTextAsync("test.json", Encoding.UTF8.GetString(message.Body));
                     Interlocked.Increment(ref _sentMessagesCount);
+                    if (_iotHubClient != null) {
+                        await _iotHubClient.SendEventAsync(new Message(message.Body));
+                    }
+                    else if (_ehClient != null) {
+                    //    await _ehClient.SendAsync(new EventData(message.Body), DateTime.UtcNow.ToString());
+                    }
+                    else if (_rawClient != null) {
+                        _rawClient.Send(message.Body);
+                    }
+                    else if (_outputRate == 0) {
+                        //  await File.WriteAllBytesAsync("test.json", message.Body);
+                       // await Socket.
+                    }
                 }
-                if (_outputRate > 0 && _outputRate < 1000) {
-                    await Task.Delay(1000 / _outputRate * numberOfMessages); // Sending rate
+                if (_ehClient != null) {
+                    await _ehClient.SendAsync(messages.Select(e => new EventData(e.Body)), DateTime.UtcNow.ToString());
+                }
+                else if (_iotHubClient == null && _rawClient == null) {
+                    if (_outputRate > 0 && _outputRate < 1000) {
+                        await Task.Delay(1000 / _outputRate * numberOfMessages); // Sending rate
+                    }
+                    else if (_outputRate == 0) {
+                      //  await Task.Delay(3000);
+                    }
                 }
             }
 
+            private bool ValidateCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
+                return true;
+            }
 
             private readonly int _inputRate;
             private readonly int _notifications;
@@ -355,6 +439,39 @@ Options:
             private readonly TimeSpan _interval;
             private readonly MessagingMode _mode;
             private readonly MessageEncoding _encoding;
+            private readonly EventHubClient _ehClient;
+            private readonly RawMqttClient _rawClient;
+        }
+
+        public class RawMqttClient {
+            private readonly ConnectionString _cs;
+            private readonly MqttClient _client;
+
+            public RawMqttClient(string connectionString) {
+                _cs = ConnectionString.Parse(connectionString);
+                _client = new MqttClient($"{_cs.HostName}.azure-devices.net", 8883, true, null, null, MqttSslProtocols.TLSv1_2, Validate);
+                var target = $"{_cs.HostName}.azure-devices.net/{_cs.DeviceId}/api-version=2018-06-30";
+                var sas = new SharedAccessSignatureBuilder {
+                    Key = _cs.SharedAccessKey,
+                    KeyName = _cs.DeviceId,
+                    Target = target,
+                    TimeToLive = TimeSpan.FromDays(1)
+                }.ToSignature();
+                _client.Connect(_cs.DeviceId, target, sas);
+            }
+
+            /// <summary>
+            /// Sending
+            /// </summary>
+            /// <param name="buffer"></param>
+            /// <returns></returns>
+            public void Send(byte[] buffer) {
+                _client.Publish($"devices/{_cs.DeviceId}/messages/events/", buffer, MqttMsgBase.QOS_LEVEL_AT_LEAST_ONCE, false);
+            }
+
+            private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
+                return true;
+            }
         }
     }
 }

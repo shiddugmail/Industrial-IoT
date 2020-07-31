@@ -5,6 +5,7 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.EventHubs" Version="4.2.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" Version="3.1.6" />
   </ItemGroup>
   <ItemGroup>
