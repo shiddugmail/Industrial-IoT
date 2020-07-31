@@ -29,6 +29,7 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
     using Microsoft.Azure.IIoT.Utils;
     using uPLibrary.Networking.M2Mqtt;
     using uPLibrary.Networking.M2Mqtt.Messages;
+    using System.Collections.Concurrent;
 
     /// <summary>
     /// Publisher module host process
@@ -403,7 +404,7 @@ Options:
                     //    await _ehClient.SendAsync(new EventData(message.Body), DateTime.UtcNow.ToString());
                     }
                     else if (_rawClient != null) {
-                        _rawClient.Send(message.Body);
+                        await _rawClient.SendAsync(message.Body);
                     }
                     else if (_outputRate == 0) {
                         //  await File.WriteAllBytesAsync("test.json", message.Body);
@@ -445,12 +446,17 @@ Options:
 
         public class RawMqttClient {
             private readonly ConnectionString _cs;
-            private readonly MqttClient _client;
+            private MqttClient _client;
+            private TaskCompletionSource<bool> _tcs;
 
             public RawMqttClient(string connectionString) {
                 _cs = ConnectionString.Parse(connectionString);
-                _client = new MqttClient($"{_cs.HostName}.azure-devices.net", 8883, true, null, null, MqttSslProtocols.TLSv1_2, Validate);
-                var target = $"{_cs.HostName}.azure-devices.net/{_cs.DeviceId}/api-version=2018-06-30";
+                Connect();
+            }
+
+            private void Connect() {
+                _client = new MqttClient(_cs.HostName, 8883, true, null, null, MqttSslProtocols.TLSv1_2, Validate);
+                var target = $"{_cs.HostName}/{_cs.DeviceId}/api-version=2018-06-30";
                 var sas = new SharedAccessSignatureBuilder {
                     Key = _cs.SharedAccessKey,
                     KeyName = _cs.DeviceId,
@@ -458,6 +464,21 @@ Options:
                     TimeToLive = TimeSpan.FromDays(1)
                 }.ToSignature();
                 _client.Connect(_cs.DeviceId, target, sas);
+                _client.ConnectionClosed += _client_ConnectionClosed;
+                _client.MqttMsgPublished += _client_MqttMsgPublished;
+                _client.MqttMsgPublishReceived += _client_MqttMsgPublishReceived;
+            }
+
+            private void _client_ConnectionClosed(object sender, EventArgs e) {
+                Connect();
+            }
+
+            private void _client_MqttMsgPublishReceived(object sender, MqttMsgPublishEventArgs e) {
+                _tcs?.SetResult(true);
+            }
+
+            private void _client_MqttMsgPublished(object sender, MqttMsgPublishedEventArgs e) {
+                _tcs?.SetResult(true);
             }
 
             /// <summary>
@@ -465,13 +486,17 @@ Options:
             /// </summary>
             /// <param name="buffer"></param>
             /// <returns></returns>
-            public void Send(byte[] buffer) {
-                _client.Publish($"devices/{_cs.DeviceId}/messages/events/", buffer, MqttMsgBase.QOS_LEVEL_AT_LEAST_ONCE, false);
+            public Task SendAsync(byte[] buffer) {
+                _tcs = new TaskCompletionSource<bool>();
+                _client.Publish($"devices/{_cs.DeviceId}/messages/events/", buffer, MqttMsgBase.QOS_LEVEL_AT_MOST_ONCE, false);
+                return _tcs.Task;
             }
 
             private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
                 return true;
             }
+
+
         }
     }
 }
