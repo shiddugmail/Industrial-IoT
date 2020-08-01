@@ -107,7 +107,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
                                 result = _messageEncoder.Encode(input, _maxEncodedMessageSize);
                             }
                             else {
-                                result = _messageEncoder.EncodeBatch(input, _maxEncodedMessageSize);
+                                result = _messageEncoder.EncodeBatch(input, _maxEncodedMessageSize).ToList();
                             }
                         }
                         catch (Exception e) {
@@ -117,8 +117,11 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
                         return result;
                     })
                     .Do(input => Interlocked.Add(ref _messageSending, input.Count()))
-                    .Select(input => Observable.FromAsync(ct => _messageSink.SendAsync(input), Scheduler.Immediate))
-                    .Merge(1) // single concurrency sending to keep order
+                    .Select(input => {
+                        _messageSink.SendAsync(input).GetAwaiter().GetResult();
+                        return true;
+                    })
+                    //.Merge(1) // single concurrency sending to keep order
                     .Subscribe()) {
 
                     await _messageTrigger.RunAsync(cancellationToken).ConfigureAwait(false);
