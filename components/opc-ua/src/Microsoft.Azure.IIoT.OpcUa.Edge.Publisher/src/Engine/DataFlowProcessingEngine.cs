@@ -20,11 +20,9 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
     using System.Text;
     using System.Collections.Generic;
     using System.Diagnostics;
+    using System.Collections.Concurrent;
     using System.Reactive.Linq;
     using Prometheus;
-    using System.Collections.Concurrent;
-    using System.Reactive.Concurrency;
-    using System.Threading.Tasks.Dataflow;
 
     /// <summary>
     /// Dataflow engine
@@ -96,47 +94,43 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
                     _diagnosticsOutputTimer.Change(_diagnosticInterval, _diagnosticInterval);
                 }
 
-                var _sendQueue = new BlockingCollection<IList<NetworkMessageModel>>();
-                async Task SendAllAsync(CancellationToken ct) {
-                    while (!ct.IsCancellationRequested) {
-                        var sw = Stopwatch.StartNew();
-                        var messages = _sendQueue.Take(ct);
-                        _logger.Debug("Waited {elapsed}", sw.Elapsed);
+                // consume
+                var _sendQueue = new BlockingCollection<NetworkMessageModel>();
+                var consumer = Task.Factory.StartNew(async () => {
+                    var sw = Stopwatch.StartNew();
+                    while (!cancellationToken.IsCancellationRequested) {
                         sw.Restart();
+                        observable.OnDrained(_sendQueue.Count); // Ask for more before taking
+                        var messages = new List<NetworkMessageModel> {
+                            _sendQueue.Take(cancellationToken)
+                        };
+                        while (messages.Count < 50 && _sendQueue.TryTake(out var more)) {
+                            messages.Add(more);
+                        }
+                        observable.OnDrained(_sendQueue.Count); // Ask for more before sending
+                        sw.Restart();
+                        _logger.Information("Waited {elapsed} - now sending {count} ", sw.Elapsed, messages.Count);
                         await _messageSink.SendAsync(messages);
-                        _logger.Debug("Sending took {elapsed}", sw.Elapsed);
-                        sw.Restart();
-                        observable.DrainOne();
-                        _logger.Verbose("Drain took {elapsed}", sw.Elapsed);
+                        _logger.Information("Sending {count} took {elapsed}", messages.Count, sw.Elapsed);
                     }
-                }
-
-                // Encoder
-                var encoder = new TransformBlock<IList<DataSetMessageModel>, IList<NetworkMessageModel>>(
-                    Encode,
-                    new ExecutionDataflowBlockOptions {
-                        BoundedCapacity = 5,
-                        EnsureOrdered = true,
-                        MaxDegreeOfParallelism = DataflowBlockOptions.Unbounded,
-                        CancellationToken = cancellationToken
-                    });
+                }, TaskCreationOptions.LongRunning).Unwrap();
 
                 // produce
                 _messageTrigger.OnMessage += _messageTrigger_OnMessage;
                 var producer = _messageTrigger.RunAsync(cancellationToken).ConfigureAwait(false);
-                var consumer = Task.Factory.StartNew(() => SendAllAsync(cancellationToken),
-                    TaskCreationOptions.LongRunning).Unwrap();
                 IsRunning = true;
+
+                // Buffer and encode
                 try {
-                    // Buffer and encode
-                    observable
+                    await observable
                         .Buffer(_batchTriggerInterval, _dataSetMessageBufferSize)
-                        .Subscribe(encoder.AsObserver(), cancellationToken);
-                    await encoder.AsObservable()
+                        .Select(input => Encode(input))
                         .ForEachAsync(input => {
                             Interlocked.Add(ref _messageSending, input.Count);
-                            _sendQueue.Add(input.ToList());
-                            observable.FillOne();
+                            foreach (var message in input) {
+                                _sendQueue.Add(message);
+                            }
+                            observable.OnFilled(_sendQueue.Count);
                         }, cancellationToken);
                 }
                 catch (Exception ex) {

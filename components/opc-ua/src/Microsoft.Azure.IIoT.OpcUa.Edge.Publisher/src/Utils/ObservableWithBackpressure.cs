@@ -25,7 +25,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         /// <param name="logger"></param>
         /// <param name="lower"></param>
         /// <param name="upper"></param>
-        public ObservableWithBackpressure(ILogger logger, long lower = 3, long upper = 10) {
+        public ObservableWithBackpressure(ILogger logger, long lower = 3, long upper = 50) {
             _subject = new Subject<T>();
             _lock = new SemaphoreSlim(1);
             _logger = logger ?? Log.Logger;
@@ -51,11 +51,10 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         /// <summary>
         /// Fill one
         /// </summary>
-        public void FillOne() {
-            var result = Interlocked.Increment(ref _level);
-            _logger.Verbose("Fill at {level}", result);
+        public void OnFilled(long size) {
             if (!Closed) {
-                if (result >= _upper) {
+                _logger.Information("Fill at {level}", size);
+                if (size >= _upper) {
                     _dam = Task.Factory.StartNew(() => WaitDrain());
                 }
             }
@@ -64,11 +63,10 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         /// <summary>
         /// Drain one
         /// </summary>
-        public void DrainOne() {
-            var result = Interlocked.Decrement(ref _level);
-            _logger.Verbose("Drain at {level}", result);
+        public void OnDrained(long size) {
             if (Closed) {
-                if (result <= _lower) {
+                _logger.Information("Drain at {level}", size);
+                if (size <= _lower) {
                     _reset.Set(); // Unlock write lock
                 }
             }
@@ -79,10 +77,10 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         /// </summary>
         private void WaitDrain() {
             _lock.Wait(); // Aquire lock to block enqueue
-            _logger.Information("Stop input at {level}", _level);
+            _logger.Information("Stop input");
             _reset.WaitOne(); // Wait for reset
             _dam = null; // remove the dam and continue consuming
-            _logger.Information("Resume input at {level}", _level);
+            _logger.Information("Resume input");
             _lock.Release();
         }
 
@@ -93,7 +91,5 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         private readonly ILogger _logger;
         private readonly long _lower;
         private readonly long _upper;
-        private long _level;
     }
-
 }

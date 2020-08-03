@@ -10,14 +10,18 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
     using Microsoft.Azure.IIoT.OpcUa.Protocol.Models;
     using Microsoft.Azure.IIoT.OpcUa.Publisher;
     using Microsoft.Azure.IIoT.OpcUa.Publisher.Models;
+    using Microsoft.Azure.IIoT.OpcUa.Exceptions;
     using Microsoft.Azure.IIoT.Diagnostics;
     using Microsoft.Azure.IIoT.Module;
     using Microsoft.Azure.Devices.Client;
     using Microsoft.Azure.Devices.Client.Transport.Mqtt;
+    using Microsoft.Azure.EventHubs;
+    using Microsoft.Azure.IIoT.Utils;
     using Opc.Ua;
     using Serilog;
     using Serilog.Events;
     using System;
+    using System.IO;
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Linq;
@@ -25,11 +29,8 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
     using System.Threading.Tasks;
     using System.Security.Cryptography.X509Certificates;
     using System.Net.Security;
-    using Microsoft.Azure.EventHubs;
-    using Microsoft.Azure.IIoT.Utils;
     using uPLibrary.Networking.M2Mqtt;
     using uPLibrary.Networking.M2Mqtt.Messages;
-    using System.Collections.Concurrent;
 
     /// <summary>
     /// Publisher module host process
@@ -39,8 +40,11 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
         public enum Target {
             None,
             Sdk,
+            SdkBatch,
             Raw,
-            EventHub
+            EventHub,
+            EventHubBatch,
+            File
         }
 
         /// <summary>
@@ -50,7 +54,7 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
             var target = Target.None;
             var inputRate = 100000000; // x values total per second
             var notifications = 1000000; // over x messages
-            var outputRate = 0; // x network messages per second (-1 == max)
+            var outputRate = 0; // x network messages per second (0 == max)
             var mode = MessagingMode.Samples;
             var encoding = MessageEncoding.Json;
             var batchInterval = TimeSpan.FromMilliseconds(500);
@@ -127,10 +131,6 @@ namespace Microsoft.Azure.IIoT.Platform.Publisher.Edge.Cli {
                                     i--;
                                 }
                             }
-                            if (target != Target.None) {
-                                Console.WriteLine("Enter connection string:");
-                                connectionString = Console.ReadLine();
-                            }
                             break;
                         default:
                             throw new ArgumentException($"Unknown argument {args[i]}.");
@@ -168,6 +168,10 @@ Options:
                 return;
             }
 
+            if (target != Target.None && target != Target.File) {
+                Console.WriteLine("Enter connection string:");
+                connectionString = Console.ReadLine();
+            }
             var logger = ConsoleLogger.Create(LogEventLevel.Error);
             AppDomain.CurrentDomain.UnhandledException += (s, e) => {
                 logger.Fatal(e.ExceptionObject as Exception, "Exception");
@@ -223,6 +227,7 @@ Options:
             public int? MaxMessageSize { get; }
             public TimeSpan? DiagnosticsInterval { get; }
 
+            private readonly Target _target;
             private readonly DeviceClient _iotHubClient;
 
             public long SendErrorCount { get; }
@@ -244,9 +249,9 @@ Options:
                 _outputRate = outputRate;
                 _logger = logger;
                 DiagnosticsInterval = TimeSpan.FromSeconds(10);
-
+                _target = target;
                 if (!string.IsNullOrEmpty(connectionString)) {
-                    if (target == Target.EventHub) {
+                    if (target == Target.EventHub || target == Target.EventHubBatch) {
                         var cs = new EventHubsConnectionStringBuilder(connectionString) {
 
                         }.ToString();
@@ -255,7 +260,7 @@ Options:
                     else if (target == Target.Raw) {
                         _rawClient = new RawMqttClient(connectionString);
                     }
-                    else if (target == Target.Sdk) {
+                    else if (target == Target.Sdk || _target == Target.SdkBatch) {
                         _iotHubClient = DeviceClient.CreateFromConnectionString(connectionString, new ITransportSettings[] {
                             new MqttTransportSettings(Devices.Client.TransportType.Mqtt_Tcp_Only) {
                                PublishToServerQoS = DotNetty.Codecs.Mqtt.Packets.QualityOfService.AtMostOnce,
@@ -397,24 +402,26 @@ Options:
                 foreach (var message in messages) {
                     numberOfMessages++;
                     Interlocked.Increment(ref _sentMessagesCount);
-                    if (_iotHubClient != null) {
+                    if (_iotHubClient != null && _target == Target.Sdk) {
                         await _iotHubClient.SendEventAsync(new Message(message.Body));
                     }
-                    else if (_ehClient != null) {
-                    //    await _ehClient.SendAsync(new EventData(message.Body), DateTime.UtcNow.ToString());
+                    else if (_ehClient != null && _target == Target.EventHub) {
+                        await _ehClient.SendAsync(new EventData(message.Body), DateTime.UtcNow.ToString());
                     }
                     else if (_rawClient != null) {
                         await _rawClient.SendAsync(message.Body);
                     }
-                    else if (_outputRate == 0) {
-                        //  await File.WriteAllBytesAsync("test.json", message.Body);
-                       // await Socket.
+                    else if (_target == Target.File) {
+                        await File.WriteAllBytesAsync("test.json", message.Body);
                     }
                 }
-                if (_ehClient != null) {
+                if (_iotHubClient != null && _target == Target.SdkBatch) {
+                    await Task.WhenAll(messages.Select(message => _iotHubClient.SendEventAsync(new Message(message.Body))));
+                }
+                else if (_ehClient != null && _target == Target.EventHubBatch) {
                     await _ehClient.SendAsync(messages.Select(e => new EventData(e.Body)), DateTime.UtcNow.ToString());
                 }
-                else if (_iotHubClient == null && _rawClient == null) {
+                else if (_target == Target.None) {
                     if (_outputRate > 0 && _outputRate < 1000) {
                         await Task.Delay(1000 / _outputRate * numberOfMessages); // Sending rate
                     }
@@ -456,17 +463,21 @@ Options:
 
             private void Connect() {
                 _client = new MqttClient(_cs.HostName, 8883, true, null, null, MqttSslProtocols.TLSv1_2, Validate);
-                var target = $"{_cs.HostName}/{_cs.DeviceId}/api-version=2018-06-30";
-                var sas = new SharedAccessSignatureBuilder {
-                    Key = _cs.SharedAccessKey,
-                    KeyName = _cs.DeviceId,
-                    Target = target,
-                    TimeToLive = TimeSpan.FromDays(1)
-                }.ToSignature();
-                _client.Connect(_cs.DeviceId, target, sas);
                 _client.ConnectionClosed += _client_ConnectionClosed;
                 _client.MqttMsgPublished += _client_MqttMsgPublished;
                 _client.MqttMsgPublishReceived += _client_MqttMsgPublishReceived;
+                var target = $"{_cs.HostName}/{_cs.DeviceId}";
+                var resource = $"{_cs.HostName}/devices/{_cs.DeviceId}";
+                var sas = new SharedAccessSignatureBuilder {
+                    Key = _cs.SharedAccessKey,
+                  //  KeyName = _cs.DeviceId,
+                    Target = resource,
+                    TimeToLive = TimeSpan.FromHours(1)
+                }.ToSignature();
+                var result = _client.Connect(_cs.DeviceId, target, sas);
+                if (result != 0) {
+                    throw new ConnectionException("Refused");
+                }
             }
 
             private void _client_ConnectionClosed(object sender, EventArgs e) {
@@ -489,7 +500,8 @@ Options:
             public Task SendAsync(byte[] buffer) {
                 _tcs = new TaskCompletionSource<bool>();
                 _client.Publish($"devices/{_cs.DeviceId}/messages/events/", buffer, MqttMsgBase.QOS_LEVEL_AT_MOST_ONCE, false);
-                return _tcs.Task;
+                //return _tcs.Task;
+                return Task.CompletedTask;
             }
 
             private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
