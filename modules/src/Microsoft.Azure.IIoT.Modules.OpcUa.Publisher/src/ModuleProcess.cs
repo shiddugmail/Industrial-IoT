@@ -21,13 +21,13 @@ namespace Microsoft.Azure.IIoT.Modules.OpcUa.Publisher {
     using Microsoft.Azure.IIoT.Hub;
     using Microsoft.Azure.IIoT.Utils;
     using Microsoft.Azure.IIoT.Serializers;
+    using Microsoft.Extensions.Configuration;
     using System;
     using System.Diagnostics;
     using System.Runtime.Loader;
     using System.Threading;
     using System.Threading.Tasks;
     using Autofac;
-    using Microsoft.Extensions.Configuration;
     using Serilog;
     using Prometheus;
 

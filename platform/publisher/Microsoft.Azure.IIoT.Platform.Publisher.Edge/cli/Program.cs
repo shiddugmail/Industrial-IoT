@@ -426,7 +426,7 @@ Options:
                         await Task.Delay(1000 / _outputRate * numberOfMessages); // Sending rate
                     }
                     else if (_outputRate == 0) {
-                      //  await Task.Delay(3000);
+                        await Task.Delay(10000);
                     }
                 }
             }

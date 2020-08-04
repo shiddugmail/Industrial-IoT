@@ -53,7 +53,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         /// </summary>
         public void OnFilled(long size) {
             if (!Closed) {
-                _logger.Information("Fill at {level}", size);
+                _logger.Verbose("Fill at {level}", size);
                 if (size >= _upper) {
                     _dam = Task.Factory.StartNew(() => WaitDrain());
                 }
@@ -65,7 +65,7 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Utils {
         /// </summary>
         public void OnDrained(long size) {
             if (Closed) {
-                _logger.Information("Drain at {level}", size);
+                _logger.Verbose("Drain at {level}", size);
                 if (size <= _lower) {
                     _reset.Set(); // Unlock write lock
                 }

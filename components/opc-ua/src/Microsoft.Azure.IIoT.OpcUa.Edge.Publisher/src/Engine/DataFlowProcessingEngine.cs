@@ -109,9 +109,9 @@ namespace Microsoft.Azure.IIoT.OpcUa.Edge.Publisher.Engine {
                         }
                         observable.OnDrained(_sendQueue.Count); // Ask for more before sending
                         sw.Restart();
-                        _logger.Information("Waited {elapsed} - now sending {count} ", sw.Elapsed, messages.Count);
+                        _logger.Verbose("Waited {elapsed} - now sending {count} ", sw.Elapsed, messages.Count);
                         await _messageSink.SendAsync(messages);
-                        _logger.Information("Sending {count} took {elapsed}", messages.Count, sw.Elapsed);
+                        _logger.Verbose("Sending {count} took {elapsed}", messages.Count, sw.Elapsed);
                     }
                 }, TaskCreationOptions.LongRunning).Unwrap();
 
